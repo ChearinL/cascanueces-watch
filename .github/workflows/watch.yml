@@ -2,7 +2,7 @@ name: Cascanueces 12/26 watch
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 5분마다 (GitHub 최소 간격, 실제로는 몇 분 지연될 수 있음)
+    - cron: "17 * * * *"   # 매시간 17분에 시작 (한 번 시작하면 약 55분 동안 3분마다 확인)
   workflow_dispatch:         # 수동 실행 버튼
     inputs:
       test_alert:
@@ -21,7 +21,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,12 +35,14 @@ jobs:
         id: check
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          TEST_ALERT: ${{ github.event.inputs.test_alert }}
         run: |
           set +e
-          python watch.py --once
+          if [ "$TEST_ALERT" = "true" ]; then ARGS="--once"; else ARGS="--max-minutes 55 --interval 180"; fi
+          python watch.py $ARGS
           code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          # 0=품절 / 10=풀림(알림 발송됨) / 2=12/26 카드 없음 / 3=접속 실패
+          # 0=정상 종료 / 10=풀림(알림 발송됨) / 2=12/26 카드 없음 / 3=접속 실패
           if [ "$code" = "0" ] || [ "$code" = "10" ]; then exit 0; fi
           exit "$code"
       - name: Stop watching after alert
