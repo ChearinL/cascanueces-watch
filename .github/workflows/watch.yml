@@ -3,7 +3,12 @@ name: Cascanueces 12/26 watch
 on:
   schedule:
     - cron: "*/5 * * * *"   # 5분마다 (GitHub 최소 간격, 실제로는 몇 분 지연될 수 있음)
-  workflow_dispatch: {}      # 수동 실행 버튼
+  workflow_dispatch:         # 수동 실행 버튼
+    inputs:
+      test_alert:
+        description: "GitHub 알림 시험용: 일부러 실패시킴"
+        type: boolean
+        default: false
 
 permissions:
   contents: read             # 저장소 체크아웃용
@@ -45,4 +50,7 @@ jobs:
         run: gh workflow disable "Cascanueces 12/26 watch" --repo "$GITHUB_REPOSITORY"
       - name: "TICKETS AVAILABLE (intentional fail so GitHub sends a notification)"
         if: steps.check.outputs.code == '10'
+        run: exit 1
+      - name: "TEST ALERT (intentional fail, manual test only)"
+        if: github.event.inputs.test_alert == 'true'
         run: exit 1
