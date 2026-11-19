@@ -2,7 +2,7 @@ name: Cascanueces 12/26 watch
 
 on:
   schedule:
-    - cron: "17 * * * *"   # 매시간 17분에 시작 (한 번 시작하면 약 55분 동안 3분마다 확인)
+    - cron: "17 * * * *"   # 백업용: 매시간 17분 (GitHub이 건너뛰는 경우가 있어서 아래 '다음 실행 예약'이 주력)
   workflow_dispatch:         # 수동 실행 버튼
     inputs:
       test_alert:
@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read             # 저장소 체크아웃용
-  actions: write             # 알림 후 스스로 비활성화하기 위해
+  actions: write             # 알림 후 스스로 비활성화 / 다음 실행 예약
 
 concurrency:
   group: watch
@@ -45,6 +45,11 @@ jobs:
           # 0=정상 종료 / 10=풀림(알림 발송됨) / 2=12/26 카드 없음 / 3=접속 실패
           if [ "$code" = "0" ] || [ "$code" = "10" ]; then exit 0; fi
           exit "$code"
+      - name: Schedule next run
+        if: steps.check.outputs.code == '0' && github.event.inputs.test_alert != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run watch.yml --repo "$GITHUB_REPOSITORY" --ref main
       - name: Stop watching after alert
         if: steps.check.outputs.code == '10'
         env:
