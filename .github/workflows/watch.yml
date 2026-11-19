@@ -43,3 +43,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow disable "Cascanueces 12/26 watch" --repo "$GITHUB_REPOSITORY"
+      - name: "TICKETS AVAILABLE (intentional fail so GitHub sends a notification)"
+        if: steps.check.outputs.code == '10'
+        run: exit 1
