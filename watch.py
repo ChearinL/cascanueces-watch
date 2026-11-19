@@ -107,11 +107,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--test-notify", action="store_true")
+    ap.add_argument("--max-minutes", type=float, help="이 시간(분)이 지나면 정상 종료(GitHub Actions용)")
+    ap.add_argument("--interval", type=float, help="확인 간격(초), 기본 180")
     ap.add_argument("--url", help="다른 공연 페이지로 테스트할 때")
     ap.add_argument("--day", help="감시할 일(예: 26)")
     ap.add_argument("--month", help="감시할 달, 페이지 표기 그대로(예: DICIEMBRE)")
     args = ap.parse_args()
-    global URL, TARGET_DAY, TARGET_MONTH
+    global URL, TARGET_DAY, TARGET_MONTH, INTERVAL_SEC
+    if args.interval:
+        INTERVAL_SEC = args.interval
     URL = args.url or URL
     TARGET_DAY = args.day or TARGET_DAY
     TARGET_MONTH = (args.month or TARGET_MONTH).upper()
@@ -126,6 +130,8 @@ def main():
         sys.exit("playwright 가 없습니다: pip3 install playwright && python3 -m playwright install chromium")
 
     fails = 0
+    deadline = time.time() + args.max_minutes * 60 if args.max_minutes else None
+    not_found = 0
     with sync_playwright() as pw:
         while True:
             try:
@@ -135,11 +141,14 @@ def main():
                 if status == "AVAILABLE":
                     notify("Cascanueces 12/26 티켓 풀림!", f"지금 확인하세요: {URL}")
                     log("알림을 보냈습니다. 감시를 종료합니다.")
-                    sys.exit(10 if args.once else 0)
+                    sys.exit(10)
                 if status == "NOT_FOUND":
                     log("12/26 카드를 찾지 못했습니다(페이지 구조 변경/일정 삭제 가능성).")
-                    if args.once:
+                    not_found += 1
+                    if args.once or not_found >= 3:
                         sys.exit(2)
+                else:
+                    not_found = 0
             except Exception as e:  # noqa: BLE001
                 fails += 1
                 log(f"확인 실패({fails}회): {e}")
@@ -148,6 +157,9 @@ def main():
                 if fails == 5:
                     notify("감시기 확인 실패", "5번 연속 실패. 인터넷/사이트 상태를 확인하세요.")
             if args.once:
+                return
+            if deadline and time.time() + INTERVAL_SEC > deadline:
+                log("정해진 시간이 끝나 정상 종료합니다(다음 실행이 이어받습니다).")
                 return
             time.sleep(INTERVAL_SEC + random.uniform(0, JITTER_SEC))
 
