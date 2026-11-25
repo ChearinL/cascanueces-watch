@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Entradas BA - El Cascanueces 12/26 20:00 품절 해제 감시기
+Entradas BA - El Cascanueces 12/26 20:00, 12/27 17:00 품절 해제 감시기
 
 - 페이지가 Blazor(JS 렌더링)라서 Playwright(headless Chromium)로 열어서 날짜 카드를 읽는다.
-- 12/26 카드에서 'no-disponible' / 'Agotado' 가 사라지면 알림을 보낸다.
+- 12/26, 12/27 카드가 새로 예매 가능해지면 알림을 보낸다(계속 가능한 상태면 다시 알리지 않음, state.json).
 - 알림: macOS 알림 + 소리, (선택) ntfy.sh 로 폰 푸시.
 - 읽기만 한다. 로그인/결제는 하지 않는다.
 
@@ -17,6 +17,7 @@ Entradas BA - El Cascanueces 12/26 20:00 품절 해제 감시기
     python3 cascanueces_watch.py --test-notify  # 알림이 오는지만 테스트
 """
 import argparse
+import json
 import os
 import random
 import subprocess
@@ -26,7 +27,8 @@ import urllib.request
 from datetime import datetime
 
 URL = "https://entradasba.buenosaires.gob.ar/evento/335449d8-79db-4f40-8580-28e0aab4311d"
-TARGET_DAY = "26"          # 감시할 날짜(일)
+TARGET_DAYS = ["26", "27"]  # 감시할 날짜(일)
+STATE_FILE = "state.json"   # 직전 상태 저장(새로 풀렸을 때만 알림)
 TARGET_MONTH = "DICIEMBRE" # 감시할 달(스페인어, 페이지 표기 그대로)
 INTERVAL_SEC = 180         # 확인 간격(초). 너무 짧게 하지 마세요(서버 부담/차단 방지).
 JITTER_SEC = 30            # 간격에 랜덤으로 더할 최대 초
@@ -76,7 +78,7 @@ def read_cards(page):
 
 
 def check_once(pw):
-    """반환: 'AVAILABLE' | 'SOLD_OUT' | 'NOT_FOUND' (예외는 호출자가 처리)"""
+    """반환: {일: 'AVAILABLE' | 'SOLD_OUT' | 'NOT_FOUND'} (예외는 호출자가 처리)"""
     browser = pw.chromium.launch(headless=True)
     try:
         page = browser.new_page(locale="es-AR")
@@ -94,13 +96,30 @@ def check_once(pw):
             nxt.click()
             page.wait_for_timeout(700)
 
-        card = seen.get((TARGET_DAY, TARGET_MONTH))
         log("dates seen: " + ", ".join(f"{d}/{m[:3]}{'(X)' if c['soldOut'] else '(OK)'}" for (d, m), c in seen.items()))
-        if card is None:
-            return "NOT_FOUND"
-        return "SOLD_OUT" if card["soldOut"] else "AVAILABLE"
+        result = {}
+        for day in TARGET_DAYS:
+            card = seen.get((day, TARGET_MONTH))
+            if card is None:
+                result[day] = "NOT_FOUND"
+            else:
+                result[day] = "SOLD_OUT" if card["soldOut"] else "AVAILABLE"
+        return result
     finally:
         browser.close()
+
+
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f)
 
 
 def main():
@@ -110,14 +129,14 @@ def main():
     ap.add_argument("--max-minutes", type=float, help="이 시간(분)이 지나면 정상 종료(GitHub Actions용)")
     ap.add_argument("--interval", type=float, help="확인 간격(초), 기본 180")
     ap.add_argument("--url", help="다른 공연 페이지로 테스트할 때")
-    ap.add_argument("--day", help="감시할 일(예: 26)")
+    ap.add_argument("--days", help="감시할 일, 쉼표로 구분(예: 26,27)")
     ap.add_argument("--month", help="감시할 달, 페이지 표기 그대로(예: DICIEMBRE)")
     args = ap.parse_args()
-    global URL, TARGET_DAY, TARGET_MONTH, INTERVAL_SEC
+    global URL, TARGET_DAYS, TARGET_MONTH, INTERVAL_SEC
     if args.interval:
         INTERVAL_SEC = args.interval
     URL = args.url or URL
-    TARGET_DAY = args.day or TARGET_DAY
+    TARGET_DAYS = args.days.split(",") if args.days else TARGET_DAYS
     TARGET_MONTH = (args.month or TARGET_MONTH).upper()
 
     if args.test_notify:
@@ -132,18 +151,28 @@ def main():
     fails = 0
     deadline = time.time() + args.max_minutes * 60 if args.max_minutes else None
     not_found = 0
+    state = load_state()
     with sync_playwright() as pw:
         while True:
             try:
-                status = check_once(pw)
+                results = check_once(pw)
                 fails = 0
-                log(f"{TARGET_DAY}/{TARGET_MONTH}: {status}")
-                if status == "AVAILABLE":
-                    notify("Cascanueces 12/26 티켓 풀림!", f"지금 확인하세요: {URL}")
-                    log("알림을 보냈습니다. 감시를 종료합니다.")
+                released = []
+                for day, status in results.items():
+                    log(f"{day}/{TARGET_MONTH}: {status}")
+                    if status == "NOT_FOUND":
+                        continue  # 직전 상태 유지
+                    if status == "AVAILABLE" and state.get(day) != "AVAILABLE":
+                        released.append(day)
+                    state[day] = status
+                save_state(state)
+                if released:
+                    names = ", ".join(f"12/{d}" for d in released)
+                    notify(f"Cascanueces {names} 티켓 풀림!", f"{names} 지금 확인하세요: {URL}")
+                    log("알림을 보냈습니다. 다음 실행이 감시를 이어갑니다.")
                     sys.exit(10)
-                if status == "NOT_FOUND":
-                    log("12/26 카드를 찾지 못했습니다(페이지 구조 변경/일정 삭제 가능성).")
+                if all(s == "NOT_FOUND" for s in results.values()):
+                    log("대상 날짜 카드를 찾지 못했습니다(페이지 구조 변경/일정 삭제 가능성).")
                     not_found += 1
                     if args.once or not_found >= 3:
                         sys.exit(2)
