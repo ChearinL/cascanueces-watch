@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read             # 저장소 체크아웃용
-  actions: write             # 알림 후 스스로 비활성화 / 다음 실행 예약
+  actions: write             # 다음 실행 예약
 
 concurrency:
   group: watch
@@ -31,7 +31,13 @@ jobs:
         run: |
           pip install playwright
           python -m playwright install --with-deps chromium
-      - name: Check 12/26
+      - name: Restore last seen state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: watch-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: watch-state-
+      - name: Check 12/26 and 12/27
         id: check
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -42,19 +48,20 @@ jobs:
           python watch.py $ARGS
           code=$?
           echo "code=$code" >> "$GITHUB_OUTPUT"
-          # 0=정상 종료 / 10=풀림(알림 발송됨) / 2=12/26 카드 없음 / 3=접속 실패
+          # 0=정상 종료 / 10=풀림(알림 발송됨) / 2=대상 날짜 카드 없음 / 3=접속 실패
           if [ "$code" = "0" ] || [ "$code" = "10" ]; then exit 0; fi
           exit "$code"
+      - name: Save state
+        if: always() && github.event.inputs.test_alert != 'true' && hashFiles('state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: watch-state-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Schedule next run
-        if: steps.check.outputs.code == '0' && github.event.inputs.test_alert != 'true'
+        if: (steps.check.outputs.code == '0' || steps.check.outputs.code == '10') && github.event.inputs.test_alert != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run watch.yml --repo "$GITHUB_REPOSITORY" --ref main
-      - name: Stop watching after alert
-        if: steps.check.outputs.code == '10'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow disable "Cascanueces 12/26 watch" --repo "$GITHUB_REPOSITORY"
       - name: "TICKETS AVAILABLE (intentional fail so GitHub sends a notification)"
         if: steps.check.outputs.code == '10'
         run: exit 1
